@@ -186,7 +186,7 @@ class FileTransport
     end
 
     def send(state, data)
-        File.open(path, "w+") { |f|
+        File.open(@path, "a+") { |f|
             f.write(data)
         }
     end
@@ -329,16 +329,21 @@ class LengthEncoder
 
     def decode(state, message)
         length = message.unpack(LENGTH_FORMAT)[0]
-        [message[LENGTH_LENGTH...LENGTH_LENGTH + length], message[LENGTH_LENGTH + length..-1]]
+        if length
+          [message[LENGTH_LENGTH...LENGTH_LENGTH + length], message[LENGTH_LENGTH + length..-1]]
+        else
+          [nil, nil]
+        end
+    end
+end
+
+class DelimiterBuilder
+    def self.build(pos, options)
+      DelimiterEncoder.new(options)
     end
 end
 
 class DelimiterEncoder
-
-    def self.build(pos, options)
-      DelimiterEncoder.new(options)
-    end
-
     def initialize(delimiter)
         @start     = true
         @delimiter = delimiter
@@ -362,6 +367,12 @@ class DelimiterEncoder
             [nil, data]
         end
     end
+end
+
+class LinesEncoder < DelimiterEncoder
+  def initialize()
+    super "\n"
+  end
 end
 
 class Logger
@@ -456,7 +467,7 @@ class MessageProxy
               message, remaining_data = nil, nil
             end
 
-            if message
+            if message || @state == :end
               do_write_message(message, n + 1)
             end
 
@@ -508,8 +519,10 @@ class MessageProxyApplication
           'null'    => NullEncoder,
           '+length' => Encoder.encode(LengthEncoder),
           '-length' => Encoder.decode(LengthEncoder),
-          '+delim'  => Encoder.encode(DelimiterEncoder),
-          '-delim'  => Encoder.decode(DelimiterEncoder),
+          '+delim'  => Encoder.encode(DelimiterBuilder),
+          '-delim'  => Encoder.decode(DelimiterBuilder),
+          '+lines'  => Encoder.encode(LinesEncoder),
+          '-lines'  => Encoder.decode(LinesEncoder),
         }
 
         name, options = element_spec.split(':', 2)
