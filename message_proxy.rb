@@ -4,6 +4,9 @@
 
 require 'socket'
 
+require 'rubygems'
+require 'ffi-rzmq'
+
 ##### Interfaces #####
 
 class EndOfTransport < IOError
@@ -270,6 +273,73 @@ class Folder
     end
 end
 
+class Zmq
+
+  def self.build(pos, options)
+    mode, address = options.split(':', 2)
+    Zmq.new mode, address
+  end
+
+  def initialize(mode, address)
+    @address  = address
+    convert_mode(mode)
+    start_socket
+  end
+
+  def start_socket
+    @ctx = ZMQ::Context.new
+    @s = @ctx.socket @zmq_mode # eg ZMQ::REP
+    @s.setsockopt(ZMQ::SUBSCRIBE,'')
+    if is_server?
+      @s.bind(@address)
+    else
+      @s.connect(@address)
+    end
+  end
+
+  def convert_mode(mode)
+    table = { 'REQ'    => [ZMQ::REQ, :client, :sync],
+              'REP'    => [ZMQ::REP, :server, :sync],
+              #'DEALER' => [ZMQ::DEALER,],
+              #'ROUTER' => [ZMQ::ROUTER,],
+              'PUB'    => [ZMQ::PUB, :server, :async ] ,
+              'SUB'    => [ZMQ::SUB, :client, :async ],
+              'PUSH'   => [ZMQ::PUSH, :client, :async] ,
+              'PULL'   => [ZMQ::PULL, :server, :async],
+              #'PAIR'   => [ZMQ::PAIR,],
+     }
+
+    @zmq_mode, @type, @sync = table[mode]
+  end
+
+  def is_server?
+      @type == :server
+  end
+
+  def response_required?
+      @sync == :sync
+  end
+
+  def recv
+      msg = ""
+      @s.recv_string msg
+      if response_required?
+        @s.send_string "<Response>", 0
+      end
+      msg
+  end
+
+  def send(state, message)
+    @s.send_string(message, 0)
+    if response_required?
+      stub = ""
+      @s.recv_string stub
+    end
+    [message, nil]
+  end
+
+end
+
 ##### Encoding implementations #####
 
 class Encoder
@@ -516,6 +586,7 @@ class MessageProxyApplication
           'log'     => Logger,
           'file'    => FileTransport,
           'folder'  => Folder,
+          'zmq'     => Zmq,
           'null'    => NullEncoder,
           '+length' => Encoder.encode(LengthEncoder),
           '-length' => Encoder.decode(LengthEncoder),
