@@ -25,20 +25,8 @@ class Receiver
     end
 end
 
-class Encoder
-    def encode(message)
-        """ Return the encoded message """
-        raise NotImplementedError
-    end
-
-    def decode(data)
-        """ Return (message, remaining_data)"""
-        raise NotImplementedError
-    end
-end
-
 class Sender
-    def send(message)
+    def send(state, message)
         """ Send the message """
         raise NotImplementedError
     end
@@ -67,8 +55,8 @@ class UdpSender
         @socket.connect(ip_address, port)
     end
 
-    def send(message)
-        p @socket.write(message)
+    def send(state, message)
+        @socket.write(message)
         [ message, nil ]
     end
 end
@@ -109,7 +97,7 @@ class TcpSender
         @socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
     end
 
-    def send(data)
+    def send(state, data)
         @socket.write(data)
         [ data, nil ]
     end
@@ -171,7 +159,7 @@ class StdioTransport
         end
     end
 
-    def send(data)
+    def send(state, data)
         $stdout.write(data)
         [ data, nil ]
     end
@@ -197,7 +185,7 @@ class FileTransport
         end
     end
 
-    def send(data)
+    def send(state, data)
         File.open(path, "w+") { |f|
             f.write(data)
         }
@@ -264,7 +252,7 @@ class FolderWriter
       @path + "." + @seq.next.to_s
     end
 
-    def send(data)
+    def send(state, data)
       File.open(next_file, "w") { |f|
         f.write(data)
         [data, nil]
@@ -284,14 +272,48 @@ end
 
 ##### Encoding implementations #####
 
+class Encoder
+  """ Wrap encoder classes to meet sender interface """
+
+  def self.encode(encoder)
+    Encoder.new(:encode, encoder)
+  end
+
+  def self.decode(encoder)
+    Encoder.new(:decode, encoder)
+  end
+
+  def initialize(encode_decode, encoder)
+    @encode_decode = encode_decode
+    @encoder       = encoder
+  end
+
+  def build(pos, options)
+    build_encoder(pos, options)
+    self
+  end
+
+  def build_encoder(pos, options)
+    if @encoder.respond_to? :build
+      @encoder = @encoder.build(pos, options)
+    else
+      @encoder = @encoder.new
+    end
+  end
+
+  def send(state, message)
+    if @encode_decode == :encode
+      [@encoder.encode(message), nil]
+    else
+      @encoder.decode(state, message)
+    end
+  end
+end
+
 class NullEncoder
     """ Dgram encoder assumes each message is seperated. """
-    def encode(message)
-        message
-    end
-
-    def decode(data)
-        [data, nil]
+    def send(message)
+        [message, nil]
     end
 end
 
@@ -301,19 +323,23 @@ class LengthEncoder
     LENGTH_LENGTH = 4
 
     def encode(message)
-        header = LENGTH_FORMAT.pack(message.length)
+        header = [ message.length ].pack(LENGTH_FORMAT)
         header + message
     end
 
-    def read(data)
-        length = data.unpack(LENGTH_FORMAT)
-        [message[4...4 + length], message[length..-1]]
+    def decode(state, message)
+        length = message.unpack(LENGTH_FORMAT)[0]
+        [message[LENGTH_LENGTH...LENGTH_LENGTH + length], message[LENGTH_LENGTH + length..-1]]
     end
 end
 
 class DelimiterEncoder
 
-    def init(delimiter)
+    def self.build(pos, options)
+      DelimiterEncoder.new(options)
+    end
+
+    def initialize(delimiter)
         @start     = true
         @delimiter = delimiter
     end
@@ -323,13 +349,15 @@ class DelimiterEncoder
             @start = false
             message
         else
-            delimiter + message
+            @delimiter + message
         end
     end
 
-    def read(data)
-        if data.index delimiter
-            data.split(delimiter, 2)
+    def decode(state, data)
+        if data.index @delimiter 
+          data.split(@delimiter, 2)
+        elsif state == :end
+          [data, nil]
         else
             [nil, data]
         end
@@ -347,9 +375,9 @@ class Logger
         @name  = name
     end
 
-    def send(data)
+    def send(state, data)
         @count += 1
-        p "#{@name}: #{@count} -> #{data.length}"
+        p "#{@name}: #{state} #{@count} -> #{data}"
         [data, nil]
     end
 end
@@ -362,16 +390,16 @@ class MessageProxy
     def initialize(stream)
         @state  = :start
         @stream = stream
-        @data   = ""
+        @cache  = Array.new
     end
 
     def run
-      #begin
+      begin
         @state = :active
         process
-      #rescue
-      #  log "Fatal error: run loop terminated."
-      #end 
+      rescue
+        log "Fatal error: run loop terminated."
+      end 
     end
 
     def process
@@ -387,35 +415,59 @@ class MessageProxy
     end
 
     def process_message
-      read_message
-      write_message
+      input = read_message
+      write_message(input)
     end
 
     def read_message
         begin
           input = @stream[0].recv
-          if input
-            @data = (@data || "") + input
-          else
+          if not input
             p "Received nil data..."
           end
+          input
         rescue EndOfTransport
           @state = :end
+          nil
         end
     end
 
-    def write_message()
-        @data = do_write_message(@data, @stream[1..-1])
+    def write_message(data)
+        do_write_message(data, 1)
     end
 
-    def do_write_message(data, targets)
-        while data and 0 < data.length and not targets.empty?
-            message, data = targets[0].send(data)
+    def do_write_message(data, n)
+
+        if not @stream[n]
+          return
+        end
+
+        if data and @cache[n]
+          data = @cache[n] + data
+        elsif @cache[n]
+          data = @cache[n]
+        end
+
+        while (@state == :end) || (data and not data.empty?)
+
+            if data
+              message, remaining_data = @stream[n].send(@state, data)
+            else
+              message, remaining_data = nil, nil
+            end
+
             if message
-              do_write_message(message, targets[1..-1])
+              do_write_message(message, n + 1)
+            end
+
+            processed = data == remaining_data 
+            data = remaining_data
+            if processed
+              break
             end
         end
-        data
+
+        @cache[n] = data
     end
 
     def log(message)
@@ -446,13 +498,18 @@ class MessageProxyApplication
     def stream_element(position, element_spec)
 
         element_types = {
-          'tcp'    => Tcp,
-          'udp'    => Udp,
-          '-'      => StdioTransport,
-          'std'    => StdioTransport,
-          'log'    => Logger,
-          'file'   => FileTransport,
-          'folder' => Folder
+          'tcp'     => Tcp,
+          'udp'     => Udp,
+          '-'       => StdioTransport,
+          'std'     => StdioTransport,
+          'log'     => Logger,
+          'file'    => FileTransport,
+          'folder'  => Folder,
+          'null'    => NullEncoder,
+          '+length' => Encoder.encode(LengthEncoder),
+          '-length' => Encoder.decode(LengthEncoder),
+          '+delim'  => Encoder.encode(DelimiterEncoder),
+          '-delim'  => Encoder.decode(DelimiterEncoder),
         }
 
         name, options = element_spec.split(':', 2)
