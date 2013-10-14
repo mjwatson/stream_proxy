@@ -3,6 +3,7 @@
 ##### Dependencies ####
 
 require 'socket'
+require 'uri'
 
 require 'rubygems'
 require 'ffi-rzmq'
@@ -462,6 +463,16 @@ class Logger
         [data, nil]
     end
 end
+
+class UrlEncoder
+    def encode(message)
+      URI.encode(message)
+    end
+
+    def decode(state, message)
+      [URI.decode(message), nil]
+    end
+end
     
 
 ##### Application #####
@@ -594,6 +605,8 @@ class MessageProxyApplication
           '-delim'  => Encoder.decode(DelimiterBuilder),
           '+lines'  => Encoder.encode(LinesEncoder),
           '-lines'  => Encoder.decode(LinesEncoder),
+          '+url'    => Encoder.encode(UrlEncoder),
+          '-url'    => Encoder.decode(UrlEncoder),
         }
 
         name, options = element_spec.split(':', 2)
