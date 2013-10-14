@@ -474,6 +474,24 @@ class UrlEncoder
     end
 end
     
+class NewLineEncoder
+
+    ENCODE = {
+      '\\' => '\\\\',
+      "\n" => '\n',
+      "\r" => '\r'
+    }
+
+    DECODE = Hash[ENCODE.map { |k,v| [v,k] }] 
+
+    def encode(message)
+      message.gsub(/[\\\n\r]/) { |match| ENCODE[match] }
+    end
+
+    def decode(state, message)
+      [ message.gsub(/\\./) { |match| DECODE[match] } , nil]
+    end
+end
 
 ##### Application #####
 
@@ -607,6 +625,8 @@ class MessageProxyApplication
           '-lines'  => Encoder.decode(LinesEncoder),
           '+url'    => Encoder.encode(UrlEncoder),
           '-url'    => Encoder.decode(UrlEncoder),
+          '+n'      => Encoder.encode(NewLineEncoder),
+          '-n'      => Encoder.decode(NewLineEncoder),
         }
 
         name, options = element_spec.split(':', 2)
