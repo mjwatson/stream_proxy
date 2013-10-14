@@ -499,7 +499,7 @@ class MessageProxy
         while active?
             process_message
         end
-        log "Message proxy - end>"
+        log "\nMessage proxy - end>"
     end
 
     def active?
