@@ -7,6 +7,8 @@ require 'uri'
 
 require 'rubygems'
 require 'ffi-rzmq'
+require 'json'
+require 'xmlsimple'
 
 ##### Interfaces #####
 
@@ -493,6 +495,45 @@ class NewLineEncoder
     end
 end
 
+class JsonConverter
+    def to_hash(s)
+      JSON.parse(s)
+    end
+
+    def from_hash(h)
+      h.to_json
+    end
+end
+
+class XmlConverter
+  def to_hash(s)
+    XmlSimple.xml_in(s, { 'KeepRoot' => true })
+  end
+
+  def from_hash(h)
+    XmlSimple.xml_out(h, { 'KeepRoot' => true })
+  end
+end
+
+class Converter
+  def self.build(input, out)
+    Converter.new(input.new, out.new)
+  end
+
+  def initialize(input, out)
+    @input = input
+    @out = out
+  end
+
+  def build(pos, options)
+    self
+  end
+
+  def send(state, data)
+    [ @out.from_hash(@input.to_hash data), nil ]
+  end
+end
+
 ##### Application #####
 
 class MessageProxy
@@ -627,6 +668,8 @@ class MessageProxyApplication
           '-url'    => Encoder.decode(UrlEncoder),
           '+n'      => Encoder.encode(NewLineEncoder),
           '-n'      => Encoder.decode(NewLineEncoder),
+          'xml-json' => Converter.build(XmlConverter,JsonConverter),
+          'json-xml' => Converter.build(JsonConverter,XmlConverter),
         }
 
         name, options = element_spec.split(':', 2)
