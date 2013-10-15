@@ -495,6 +495,31 @@ class NewLineEncoder
     end
 end
 
+class Strip
+  def encode(s)
+    s.strip
+  end
+end
+
+class Skip
+  def self.build(pos, options)
+    Skip.new(options.to_i)
+  end
+
+  def initialize(i)
+    p i
+    @i = i
+  end
+
+  def send(state, message)
+    if 0 <= @i
+     [message[@i..-1], nil]
+    else
+     [message[0..@i], nil]
+    end
+  end
+end
+
 class JsonConverter
     def to_hash(s)
       JSON.parse(s)
@@ -658,6 +683,8 @@ class MessageProxyApplication
           'folder'  => Folder,
           'zmq'     => Zmq,
           'null'    => NullEncoder,
+          'skip'    => Skip,
+          'strip'   => Encoder.encode(Strip),
           '+length' => Encoder.encode(LengthEncoder),
           '-length' => Encoder.decode(LengthEncoder),
           '+delim'  => Encoder.encode(DelimiterBuilder),
